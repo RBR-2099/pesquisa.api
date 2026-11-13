@@ -7,6 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <style>
         :root {
             --rissul-red: #E30613;
@@ -195,7 +196,7 @@
             border: 1px solid #E5E7EB;
             border-radius: 8px;
             padding: 14px;
-            margin-bottom: 22px;
+            margin-bottom: 18px;
         }
 
         .lgpd-label {
@@ -223,6 +224,13 @@
             text-decoration: underline;
         }
 
+        .turnstile-wrapper {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 18px;
+            min-height: 65px;
+        }
+
         .hp-field {
             position: absolute;
             left: -9999px;
@@ -244,7 +252,7 @@
         }
 
         button[type="submit"]:hover:not(:disabled) { background-color: var(--rissul-red-dark); }
-        button[type="submit"]:disabled { background-color: #F87171; cursor: not-allowed; }
+        button[type="submit"]:disabled { background-color: #9CA3AF; cursor: not-allowed; }
 
         .status-msg {
             text-align: center;
@@ -375,7 +383,17 @@
                     </label>
                 </div>
 
-                <button type="submit" id="btn-submit">Enviar Avaliação</button>
+                <div class="turnstile-wrapper">
+                    <div class="cf-turnstile" 
+                         data-sitekey="0x4AAAAAAF_9RyvJrk5masUl" 
+                         data-theme="light"
+                         data-callback="onTurnstileSuccess"
+                         data-error-callback="onTurnstileError"
+                         data-expired-callback="onTurnstileExpired">
+                    </div>
+                </div>
+
+                <button type="submit" id="btn-submit" disabled>Verificando segurança...</button>
                 <div id="formStatus" class="status-msg" role="alert"></div>
             </form>
         </div>
@@ -393,8 +411,33 @@
 </footer>
 
 <script>
-    // COLE AQUI A URL /exec DO GOOGLE APPS SCRIPT
-    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby-4CdzzS1KyojD5dOa25fl5PYNbigAoBDNGrfssiBsgYIhgdROwySgY6Gt0C38uPtL/exec';
+    // COLE A URL DO SEU CLOUDFLARE WORKER ABAIXO
+    const WORKER_URL = 'https://pesquisa-api.rodrigo-reis-digital.workers.dev/';
+
+    let turnstileToken = '';
+    const btnSubmit = document.getElementById('btn-submit');
+    const statusText = document.getElementById('formStatus');
+
+    window.onTurnstileSuccess = function(token) {
+        turnstileToken = token;
+        btnSubmit.disabled = false;
+        btnSubmit.innerText = 'Enviar Avaliação';
+        statusText.innerText = '';
+    };
+
+    window.onTurnstileError = function(errorCode) {
+        turnstileToken = '';
+        btnSubmit.disabled = true;
+        btnSubmit.innerText = 'Falha na segurança';
+        statusText.innerText = `Erro no Turnstile (código: ${errorCode}).`;
+    };
+
+    window.onTurnstileExpired = function() {
+        turnstileToken = '';
+        btnSubmit.disabled = true;
+        btnSubmit.innerText = 'Verificando segurança...';
+        if (window.turnstile) window.turnstile.reset();
+    };
 
     const telInput = document.getElementById('telefone');
     telInput.addEventListener('input', function (e) {
@@ -426,8 +469,6 @@
         
         const emailInput = document.getElementById('email');
         const lgpdCheckbox = document.getElementById('lgpd');
-        const statusText = document.getElementById('formStatus');
-        const btnSubmit = document.getElementById('btn-submit');
 
         statusText.innerText = '';
 
@@ -443,27 +484,38 @@
             return;
         }
 
+        if (!turnstileToken) {
+            statusText.innerText = 'Aguarde a verificação de segurança ser concluída.';
+            return;
+        }
+
         btnSubmit.innerText = 'Enviando avaliação...';
         btnSubmit.disabled = true;
 
         const formData = new FormData(this);
-        const payload = new URLSearchParams(formData);
+        formData.set('cf-turnstile-response', turnstileToken);
 
-        fetch(SCRIPT_URL, {
+        fetch(WORKER_URL, {
             method: 'POST',
-            mode: 'no-cors',
-            body: payload
+            body: formData
         })
-        .then(() => {
-            document.getElementById('form-container').style.display = 'none';
-            document.getElementById('mensagem-obrigado').style.display = 'block';
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+        .then(async response => {
+            const data = await response.json();
+            if (response.ok && data.result === 'success') {
+                document.getElementById('form-container').style.display = 'none';
+                document.getElementById('mensagem-obrigado').style.display = 'block';
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            } else {
+                throw new Error(data.error || 'Falha na resposta do servidor');
+            }
         })
         .catch(error => {
             console.error('Erro:', error);
-            statusText.innerText = 'Erro de conexão. Tente novamente.';
+            statusText.innerText = `Erro: ${error.message}`;
             btnSubmit.innerText = 'Enviar Avaliação';
             btnSubmit.disabled = false;
+            turnstileToken = '';
+            if (window.turnstile) window.turnstile.reset();
         });
     });
 </script>
