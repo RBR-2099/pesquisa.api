@@ -258,11 +258,12 @@
             color: var(--rissul-red-dark);
         }
 
-        /* Container stile */
-        .stile-wrapper {
+        /* Container Turnstile */
+        .turnstile-wrapper {
             display: flex;
             justify-content: center;
             margin-bottom: 18px;
+            min-height: 65px;
         }
 
         /* Honeypot invisível para humanos */
@@ -295,7 +296,7 @@
         }
 
         button[type="submit"]:disabled {
-            background-color: #F87171;
+            background-color: #9CA3AF;
             cursor: not-allowed;
         }
 
@@ -456,12 +457,19 @@
                     </label>
                 </div>
 
-                <!-- Widget Cloudflare stile -->
-                <div class="stile-wrapper">
-                    <div class="cf-stile" data-sitekey="0x4AAAAAAF_j9w7FjQf5gzBY" data-theme="light"></div>
+                <!-- Widget Cloudflare Turnstile com Callbacks -->
+                <div class="turnstile-wrapper">
+                    <div class="cf-turnstile" 
+                         data-sitekey="0x4AAAAAAF_j9w7FjQf5gzBY" 
+                         data-theme="light"
+                         data-callback="onTurnstileSuccess"
+                         data-error-callback="onTurnstileError"
+                         data-expired-callback="onTurnstileExpired">
+                    </div>
                 </div>
 
-                <button type="submit" id="btn-submit">Enviar Avaliação</button>
+                <!-- Inicia desabilitado até o Turnstile confirmar a segurança -->
+                <button type="submit" id="btn-submit" disabled>Verificando segurança...</button>
                 <div id="formStatus" class="status-msg" role="alert" aria-live="polite"></div>
             </form>
         </div>
@@ -480,6 +488,36 @@
 </footer>
 
 <script>
+    // COLE A URL DO SEU CLOUDFLARE WORKER ABAIXO
+    const WORKER_URL = 'https://rissul-pesquisa-api.rodrigo-reis-digital.workers.dev/';
+
+    let turnstileToken = '';
+    const btnSubmit = document.getElementById('btn-submit');
+    const statusText = document.getElementById('formStatus');
+
+    // Callbacks oficiais do Cloudflare Turnstile
+    window.onTurnstileSuccess = function(token) {
+        turnstileToken = token;
+        btnSubmit.disabled = false;
+        btnSubmit.innerText = 'Enviar Avaliação';
+        statusText.innerText = '';
+    };
+
+    window.onTurnstileError = function(errorCode) {
+        turnstileToken = '';
+        btnSubmit.disabled = true;
+        btnSubmit.innerText = 'Falha na segurança';
+        statusText.className = 'status-msg status-error';
+        statusText.innerText = `Erro no Turnstile (código: ${errorCode}). Verifique a Site Key e o domínio no painel Cloudflare.`;
+    };
+
+    window.onTurnstileExpired = function() {
+        turnstileToken = '';
+        btnSubmit.disabled = true;
+        btnSubmit.innerText = 'Verificando segurança...';
+        if (window.turnstile) window.turnstile.reset();
+    };
+
     // 1. Máscara automática de telefone brasileiro (UX)
     const telInput = document.getElementById('telefone');
     telInput.addEventListener('input', function (e) {
@@ -519,8 +557,6 @@
         
         const emailInput = document.getElementById('email');
         const lgpdCheckbox = document.getElementById('lgpd');
-        const statusText = document.getElementById('formStatus');
-        const btnSubmit = document.getElementById('btn-submit');
 
         statusText.className = 'status-msg';
         statusText.innerText = '';
@@ -541,10 +577,7 @@
             return;
         }
 
-        const formData = new FormData(this);
-        
-        // Validação de token Turnstile no cliente
-        if (!formData.get('cf-turnstile-response')) {
+        if (!turnstileToken) {
             statusText.classList.add('status-error');
             statusText.innerText = 'Aguarde a verificação de segurança ser concluída.';
             return;
@@ -553,10 +586,10 @@
         btnSubmit.innerText = 'Enviando avaliação...';
         btnSubmit.disabled = true;
 
-        // COLE A URL DO SEU CLOUDFLARE WORKER ABAIXO
-        const workerURL = 'https://rissul-pesquisa-api.rodrigo-reis-digital.workers.dev/';
+        const formData = new FormData(this);
+        formData.set('cf-turnstile-response', turnstileToken);
 
-        fetch(workerURL, {
+        fetch(WORKER_URL, {
             method: 'POST',
             body: formData
         })
@@ -573,9 +606,10 @@
         .catch(error => {
             console.error('Erro no envio:', error);
             statusText.classList.add('status-error');
-            statusText.innerText = 'Não foi possível enviar agora. Tente novamente em instantes.';
+            statusText.innerText = `Erro: ${error.message}`;
             btnSubmit.innerText = 'Enviar Avaliação';
             btnSubmit.disabled = false;
+            turnstileToken = '';
             if (window.turnstile) window.turnstile.reset();
         });
     });
