@@ -7,7 +7,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    <!-- Carregamento explícito (render=explicit) para garantir que os callbacks existam antes -->
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
     <style>
         :root {
             --rissul-red: #E30613;
@@ -383,14 +384,9 @@
                     </label>
                 </div>
 
+                <!-- Container vazio onde o JS vai renderizar o Turnstile explicitamente -->
                 <div class="turnstile-wrapper">
-                    <div class="cf-turnstile" 
-                         data-sitekey="0x4AAAAAAGAACfij7TzTEf7V" 
-                         data-theme="light"
-                         data-callback="onTurnstileSuccess"
-                         data-error-callback="onTurnstileError"
-                         data-expired-callback="onTurnstileExpired">
-                    </div>
+                    <div id="turnstile-container"></div>
                 </div>
 
                 <button type="submit" id="btn-submit" disabled>Verificando segurança...</button>
@@ -411,35 +407,61 @@
 </footer>
 
 <script>
-    // COLE A URL DO SEU CLOUDFLARE WORKER ABAIXO
-    const WORKER_URL = 'rissul-pesquisa-proxy.rodrigo-reis-digital.workers.dev
-';
+    // =========================================================================
+    // CONFIGURAÇÃO: PREENCHA SUAS 2 CHAVES ABAIXO
+    // =========================================================================
+    const TURNSTILE_SITE_KEY = '0x4AAAAAAGAACfij7TzTEf7V'; // 24 caracteres
+    const WORKER_URL = 'rissul-pesquisa-proxy.rodrigo-reis-digital.workers.dev';             // https://...workers.dev
+    // =========================================================================
 
     let turnstileToken = '';
+    let widgetId = null;
     const btnSubmit = document.getElementById('btn-submit');
     const statusText = document.getElementById('formStatus');
 
-    window.onTurnstileSuccess = function(token) {
-        turnstileToken = token;
-        btnSubmit.disabled = false;
-        btnSubmit.innerText = 'Enviar Avaliação';
-        statusText.innerText = '';
-    };
+    // Inicialização explícita assim que a API da Cloudflare estiver pronta
+    function initTurnstile() {
+        if (window.turnstile && widgetId === null) {
+            widgetId = window.turnstile.render('#turnstile-container', {
+                sitekey: TURNSTILE_SITE_KEY,
+                theme: 'light',
+                callback: function(token) {
+                    turnstileToken = token;
+                    btnSubmit.disabled = false;
+                    btnSubmit.innerText = 'Enviar Avaliação';
+                    statusText.innerText = '';
+                },
+                'error-callback': function(errorCode) {
+                    turnstileToken = '';
+                    btnSubmit.disabled = false; // Libera para não travar UX se for erro recuperável
+                    btnSubmit.innerText = 'Enviar Avaliação';
+                    statusText.innerText = `Aviso de segurança (código: ${errorCode}).`;
+                },
+                'expired-callback': function() {
+                    turnstileToken = '';
+                    btnSubmit.disabled = true;
+                    btnSubmit.innerText = 'Renovando segurança...';
+                    window.turnstile.reset(widgetId);
+                }
+            });
+        } else if (!window.turnstile) {
+            setTimeout(initTurnstile, 200);
+        }
+    }
 
-    window.onTurnstileError = function(errorCode) {
-        turnstileToken = '';
-        btnSubmit.disabled = true;
-        btnSubmit.innerText = 'Falha na segurança';
-        statusText.innerText = `Erro no Turnstile (código: ${errorCode}).`;
-    };
+    // Inicia o monitoramento do script do Turnstile
+    initTurnstile();
 
-    window.onTurnstileExpired = function() {
-        turnstileToken = '';
-        btnSubmit.disabled = true;
-        btnSubmit.innerText = 'Verificando segurança...';
-        if (window.turnstile) window.turnstile.reset();
-    };
+    // Fallback de segurança: se após 5s o widget não responder (ex: bloqueador de anúncios), destrava o botão e avisa
+    setTimeout(() => {
+        if (!turnstileToken && btnSubmit.disabled) {
+            btnSubmit.disabled = false;
+            btnSubmit.innerText = 'Enviar Avaliação';
+            statusText.innerText = 'Verificação demorou mais que o esperado. Se usar bloqueador de anúncios, desative-o para enviar.';
+        }
+    }, 5000);
 
+    // Máscara de telefone
     const telInput = document.getElementById('telefone');
     telInput.addEventListener('input', function (e) {
         let v = e.target.value.replace(/\D/g, '').slice(0, 11);
@@ -449,6 +471,7 @@
         e.target.value = v;
     });
 
+    // Caixa condicional "O que faltou?"
     const radios = document.querySelectorAll('input[name="encontrou"]');
     const boxFaltou = document.getElementById('box-faltou');
     const faltouInput = document.getElementById('faltou');
@@ -465,6 +488,7 @@
         });
     });
 
+    // Envio do formulário
     document.getElementById('pesquisaForm').addEventListener('submit', function(e) {
         e.preventDefault();
         
@@ -485,8 +509,11 @@
             return;
         }
 
-        if (!turnstileToken) {
-            statusText.innerText = 'Aguarde a verificação de segurança ser concluída.';
+        // Tenta capturar o token via variável ou diretamente da API do Turnstile
+        const activeToken = turnstileToken || (window.turnstile && widgetId !== null ? window.turnstile.getResponse(widgetId) : '');
+
+        if (!activeToken) {
+            statusText.innerText = 'O widget de segurança não gerou o token. Recarregue a página ou desative bloqueadores de script.';
             return;
         }
 
@@ -494,7 +521,7 @@
         btnSubmit.disabled = true;
 
         const formData = new FormData(this);
-        formData.set('cf-turnstile-response', turnstileToken);
+        formData.set('cf-turnstile-response', activeToken);
 
         fetch(WORKER_URL, {
             method: 'POST',
@@ -516,7 +543,7 @@
             btnSubmit.innerText = 'Enviar Avaliação';
             btnSubmit.disabled = false;
             turnstileToken = '';
-            if (window.turnstile) window.turnstile.reset();
+            if (window.turnstile && widgetId !== null) window.turnstile.reset(widgetId);
         });
     });
 </script>
